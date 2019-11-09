@@ -1,5 +1,6 @@
 package de.jcm.helpy.webservice;
 
+import javax.annotation.security.PermitAll;
 import javax.servlet.ServletContext;
 import javax.ws.rs.GET;
 import javax.ws.rs.Path;
@@ -21,6 +22,7 @@ public class User
 	public String telephoneNumber;
 
 	@GET
+	@PermitAll
 	@Path("/self")
 	@Produces( { MediaType.APPLICATION_JSON} )
 	public static User self(@Context ServletContext context)
