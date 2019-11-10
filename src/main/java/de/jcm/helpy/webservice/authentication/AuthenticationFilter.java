@@ -1,33 +1,52 @@
 package de.jcm.helpy.webservice.authentication;
 
+import de.jcm.helpy.webservice.EntityInfo;
+import de.jcm.helpy.webservice.util.SQLUtil;
+
 import java.lang.reflect.Method;
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-import java.util.StringTokenizer;
+import java.security.SecureRandom;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.*;
 
 import javax.annotation.security.DenyAll;
 import javax.annotation.security.PermitAll;
 import javax.annotation.security.RolesAllowed;
+import javax.servlet.ServletContext;
+import javax.ws.rs.NotAuthorizedException;
 import javax.ws.rs.container.ContainerRequestContext;
+import javax.ws.rs.container.ContainerRequestFilter;
 import javax.ws.rs.container.ResourceInfo;
 import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MultivaluedMap;
 import javax.ws.rs.core.Response;
 import javax.ws.rs.ext.Provider;
 
-import org.glassfish.jersey.internal.util.Base64;
-
 @Provider
-public class AuthenticationFilter implements javax.ws.rs.container.ContainerRequestFilter
+public class AuthenticationFilter implements ContainerRequestFilter
 {
-
-	@Context
-	private ResourceInfo resourceInfo;
-
 	private static final String AUTHORIZATION_PROPERTY = "Authorization";
 	private static final String AUTHENTICATION_SCHEME = "Bearer";
+
+	private @Context ResourceInfo resourceInfo;
+	private @Context ServletContext context;
+
+	private PreparedStatement selectToken;
+
+	@Context
+	private void prepare() throws SQLException
+	{
+		Connection connection = (Connection) context.getAttribute("connection");
+
+		selectToken = connection.prepareStatement(
+				"SELECT e.uuid AS uuid, e.role AS role "
+						+ "FROM auth_token t, entity e "
+						+ "WHERE t.uuid = e.uuid "
+						  + "AND t.token = ? "
+						  + "AND t.expiration > CURRENT_TIMESTAMP()");
+	}
 
 	@Override
 	public void filter(ContainerRequestContext requestContext)
@@ -39,8 +58,10 @@ public class AuthenticationFilter implements javax.ws.rs.container.ContainerRequ
 			//Access denied for all
 			if(method.isAnnotationPresent(DenyAll.class))
 			{
-				requestContext.abortWith(Response.status(Response.Status.FORBIDDEN)
-						.entity("Access blocked for all users !!").build());
+				requestContext.abortWith(Response
+						.status(Response.Status.FORBIDDEN.getStatusCode(),
+								"Access blocked for all users!")
+						.build());
 				return;
 			}
 
@@ -53,40 +74,71 @@ public class AuthenticationFilter implements javax.ws.rs.container.ContainerRequ
 			//If no authorization information present; block access
 			if(authorization == null || authorization.isEmpty())
 			{
-				requestContext.abortWith(Response.status(Response.Status.UNAUTHORIZED).build());
+				requestContext.abortWith(Response
+						.status(Response.Status.UNAUTHORIZED.getStatusCode(),
+								"No Authorization header found!")
+						.build());
 				return;
 			}
 
-			//Get encoded username and password
-			final String encodedUserPassword = authorization.get(0).replaceFirst(AUTHENTICATION_SCHEME + " ", "");
+			final String token = authorization.get(0)
+					.replaceFirst(AUTHENTICATION_SCHEME + " ", "");
 
-			//Decode username and password
-			String usernameAndPassword = new String(Base64.decode(encodedUserPassword.getBytes()));;
-
-			//Split username and password tokens
-			final StringTokenizer tokenizer = new StringTokenizer(usernameAndPassword, ":");
-			final String username = tokenizer.nextToken();
-			final String password = tokenizer.nextToken();
-
-			//Verifying Username and password
-			System.out.println(username);
-			System.out.println(password);
-
-			//Verify user access
-			if(method.isAnnotationPresent(RolesAllowed.class))
+			try
 			{
-				RolesAllowed rolesAnnotation = method.getAnnotation(RolesAllowed.class);
-				Set<String> rolesSet = new HashSet<String>(Arrays.asList(rolesAnnotation.value()));
+				EntityInfo entityInfo = verifyToken(token);
+				requestContext.setProperty("entity", entityInfo);
 
-				//Is user valid?
+				//Verify user access
+				if(method.isAnnotationPresent(RolesAllowed.class))
+				{
+					RolesAllowed rolesAnnotation = method.getAnnotation(RolesAllowed.class);
+					Set<String> rolesSet = new HashSet<>(Arrays.asList(rolesAnnotation.value()));
+
+				/*//Is user valid?
 				if( ! isUserAllowed(username, password, rolesSet))
 				{
 					requestContext.abortWith(Response.status(Response.Status.UNAUTHORIZED).build());
 					return;
+				}*/
 				}
+			}
+			catch(NotAuthorizedException e)
+			{
+				requestContext.abortWith(Response
+						.status(Response.Status.UNAUTHORIZED.getStatusCode(),
+								"Authorization token is invalid!")
+						.build());
+				return;
+			}
+			catch(SQLException e)
+			{
+				e.printStackTrace();
+				requestContext.abortWith(Response
+						.status(Response.Status.INTERNAL_SERVER_ERROR)
+						.build());
+				return;
 			}
 		}
 	}
+
+	private EntityInfo verifyToken(String token) throws SQLException, NotAuthorizedException
+	{
+		selectToken.setString(1, token);
+
+		ResultSet result = selectToken.executeQuery();
+		if(!result.next())
+		{
+			throw new NotAuthorizedException("cannot find token");
+		}
+
+		EntityInfo info = new EntityInfo();
+		info.uuid = SQLUtil.UUIDHelper.fromBytes(result.getBytes("uuid"));
+		info.role = result.getString("role");
+
+		return info;
+	}
+
 	private boolean isUserAllowed(final String username, final String password, final Set<String> rolesSet)
 	{
 		boolean isAllowed = false;

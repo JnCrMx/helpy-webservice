@@ -12,7 +12,6 @@ import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import java.security.SecureRandom;
 import java.sql.*;
-import java.util.Base64;
 import java.util.Calendar;
 import java.util.Random;
 import java.util.UUID;
@@ -20,11 +19,12 @@ import java.util.UUID;
 @Path("/authentication")
 public class AuthenticationEndpoint
 {
-	private @Context ServletContext context;
+	@Context
+	private ServletContext context;
 
-	private @Context Random random;
-	private @Context PreparedStatement selectUser;
-	private @Context PreparedStatement insertToken;
+	private Random random;
+	private PreparedStatement selectUser;
+	private PreparedStatement insertToken;
 
 	@Context
 	private void prepare() throws SQLException
@@ -34,7 +34,7 @@ public class AuthenticationEndpoint
 		Connection connection = (Connection) context.getAttribute("connection");
 
 		selectUser = connection.prepareStatement(
-				"SELECT uuid, password FROM user WHERE username=?");
+				"SELECT uuid, password FROM user WHERE username = ?");
 		insertToken = connection.prepareStatement(
 				"INSERT INTO auth_token(token, uuid, expiration) VALUES(?, ?, ?)");
 	}
@@ -55,7 +55,10 @@ public class AuthenticationEndpoint
 		}
 		catch(AuthenticationException e)
 		{
-			return Response.status(Response.Status.FORBIDDEN).build();
+			return Response
+					.status(Response.Status.UNAUTHORIZED.getStatusCode(),
+							"Username or password wrong!")
+					.build();
 		}
 		catch(SQLException e)
 		{
@@ -69,12 +72,12 @@ public class AuthenticationEndpoint
 		ResultSet result = selectUser.executeQuery();
 
 		if(!result.next())
-			throw new AuthenticationException("username not present");
+			throw new AuthenticationException("username not recognized");
 
 		String hash = result.getString("password");
 
 		if(!BCrypt.verifyer().verify(password.getBytes(), hash.getBytes()).verified)
-			throw new AuthenticationException("couldn't verify password");
+			throw new AuthenticationException("failed to verify password");
 
 		return SQLUtil.UUIDHelper.fromBytes(result.getBytes("uuid"));
 	}
