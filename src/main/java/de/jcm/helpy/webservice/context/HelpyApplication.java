@@ -13,5 +13,6 @@ public class HelpyApplication extends ResourceConfig
 
 		//Register Auth Filter here
 		register(AuthenticationFilter.class);
+		register(GNUTerryPratchettFilter.class);
 	}
 }
