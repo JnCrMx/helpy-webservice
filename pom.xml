@@ -9,7 +9,7 @@
 	<version>1.0-SNAPSHOT</version>
 	<packaging>war</packaging>
 
-	<name>webservice Maven Webapp</name>
+	<name>webservice</name>
 	<!-- FIXME change it to the project's website -->
 	<url>http://www.example.com</url>
 
@@ -58,6 +58,11 @@
 			<artifactId>jaxb-api</artifactId>
 			<version>2.2.11</version>
 		</dependency>
+		<dependency>
+			<groupId>javax.activation</groupId>
+			<artifactId>activation</artifactId>
+			<version>1.1.1</version>
+		</dependency>
 
 		<dependency>
 			<groupId>mysql</groupId>
@@ -85,6 +90,12 @@
 			<groupId>at.favre.lib</groupId>
 			<artifactId>bcrypt</artifactId>
 			<version>0.9.0</version>
+		</dependency>
+
+		<dependency>
+			<groupId>de.jcm.helpy</groupId>
+			<artifactId>library-common</artifactId>
+			<version>1.0-SNAPSHOT</version>
 		</dependency>
 
 	</dependencies>
@@ -139,8 +150,8 @@
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-compiler-plugin</artifactId>
 				<configuration>
-					<source>10</source>
-					<target>10</target>
+					<source>11</source>
+					<target>11</target>
 				</configuration>
 			</plugin>
 		</plugins>
