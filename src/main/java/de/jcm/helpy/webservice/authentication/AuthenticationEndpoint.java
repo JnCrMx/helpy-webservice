@@ -4,6 +4,7 @@ import at.favre.lib.crypto.bcrypt.BCrypt;
 import de.jcm.helpy.webservice.util.SQLUtil;
 import org.apache.commons.codec.binary.Hex;
 
+import javax.annotation.security.PermitAll;
 import javax.naming.AuthenticationException;
 import javax.servlet.ServletContext;
 import javax.ws.rs.*;
@@ -39,7 +40,34 @@ public class AuthenticationEndpoint
 				"INSERT INTO auth_token(token, uuid, expiration) VALUES(?, ?, ?)");
 	}
 
+	/**
+	 * @api {post} /authentication/user Login
+	 * @apiGroup Authentication
+	 *
+	 * @apiParam {String} username Username to login with.
+	 * @apiParam {String} password Password to login with.
+	 * @apiParamExample {String} Parameter-Example
+	 *  username=testuser&password=testpassword
+	 *
+	 * @apiSuccess {String} token Access token for API use.
+	 *
+	 * @apiExample {Java} Example usage
+	 * 	HelpyApi api = new HelpyApi();
+	 *	TokenProvider provider = new LoginTokenProvider("testuser", "testpassword");
+	 *	if(api.authenticate(provider))
+	 *	{
+	 *	   // Authentication successful!
+	 *	   // Continue
+	 *	   ...
+	 *	}
+	 *	else
+	 *	{
+	 *	   // Authentication NOT successful!
+	 *	   // Abort with error!
+	 *	}
+	 */
 	@POST
+	@PermitAll
 	@Path("/user")
 	@Produces(MediaType.TEXT_PLAIN)
 	@Consumes(MediaType.APPLICATION_FORM_URLENCODED)

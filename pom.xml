@@ -141,7 +141,7 @@
 				<artifactId>tomcat7-maven-plugin</artifactId>
 				<version>2.2</version>
 				<configuration>
-					<url>http://jserver:8080/manager/text</url>
+					<url>https://jserver.kwgivnecuiphlqnj.myfritz.net/api/manager/text</url>
 					<server>TomcatServer</server>
 					<path>/helpy</path>
 				</configuration>

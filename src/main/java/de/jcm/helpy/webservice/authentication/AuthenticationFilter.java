@@ -1,10 +1,9 @@
 package de.jcm.helpy.webservice.authentication;
 
-import de.jcm.helpy.webservice.EntityInfo;
+import de.jcm.helpy.EntityInfo;
 import de.jcm.helpy.webservice.util.SQLUtil;
 
 import java.lang.reflect.Method;
-import java.security.SecureRandom;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -45,55 +44,64 @@ public class AuthenticationFilter implements ContainerRequestFilter
 						+ "FROM auth_token t, entity e "
 						+ "WHERE t.uuid = e.uuid "
 						  + "AND t.token = ? "
-						  + "AND t.expiration > CURRENT_TIMESTAMP()");
+						  + "AND ( t.expiration > CURRENT_TIMESTAMP()"
+						+ " OR t.expiration IS NULL)");
 	}
 
 	@Override
 	public void filter(ContainerRequestContext requestContext)
 	{
 		Method method = resourceInfo.getResourceMethod();
-		//Access allowed for all
-		if( ! method.isAnnotationPresent(PermitAll.class))
+
+		/*
+		Why not put
+		>	!method.isAnnotationPresent(PermitAll.class)
+		here?
+		There are some methods that MIGHT return more/other information to authorized user.
+		Therefore continue authorization even if it is not required by method.
+		 */
+
+		//Access denied for all
+		if(method.isAnnotationPresent(DenyAll.class))
 		{
-			//Access denied for all
-			if(method.isAnnotationPresent(DenyAll.class))
+			requestContext.abortWith(Response
+					.status(Response.Status.FORBIDDEN.getStatusCode(),
+							"Access blocked for all users!")
+					.build());
+			return;
+		}
+
+		//Get request headers
+		MultivaluedMap<String, String> headers = requestContext.getHeaders();
+
+		//Fetch authorization header
+		List<String> authorization = headers.get(AUTHORIZATION_PROPERTY);
+
+		//If no authorization information present
+		if(authorization == null || authorization.isEmpty())
+		{
+			if(!method.isAnnotationPresent(PermitAll.class))
 			{
-				requestContext.abortWith(Response
-						.status(Response.Status.FORBIDDEN.getStatusCode(),
-								"Access blocked for all users!")
-						.build());
-				return;
+				requestContext.abortWith(
+						Response.status(Response.Status.UNAUTHORIZED.getStatusCode(),
+								"No Authorization header found!").build());
 			}
+			return;
+		}
 
-			//Get request headers
-			final MultivaluedMap<String, String> headers = requestContext.getHeaders();
+		String token = authorization.get(0)
+				.replaceFirst(AUTHENTICATION_SCHEME + " ", "");
 
-			//Fetch authorization header
-			final List<String> authorization = headers.get(AUTHORIZATION_PROPERTY);
+		try
+		{
+			EntityInfo entityInfo = verifyToken(token);
+			requestContext.setProperty("entity", entityInfo);
 
-			//If no authorization information present; block access
-			if(authorization == null || authorization.isEmpty())
+			//Verify user access
+			if(method.isAnnotationPresent(RolesAllowed.class))
 			{
-				requestContext.abortWith(Response
-						.status(Response.Status.UNAUTHORIZED.getStatusCode(),
-								"No Authorization header found!")
-						.build());
-				return;
-			}
-
-			final String token = authorization.get(0)
-					.replaceFirst(AUTHENTICATION_SCHEME + " ", "");
-
-			try
-			{
-				EntityInfo entityInfo = verifyToken(token);
-				requestContext.setProperty("entity", entityInfo);
-
-				//Verify user access
-				if(method.isAnnotationPresent(RolesAllowed.class))
-				{
-					RolesAllowed rolesAnnotation = method.getAnnotation(RolesAllowed.class);
-					Set<String> rolesSet = new HashSet<>(Arrays.asList(rolesAnnotation.value()));
+				RolesAllowed rolesAnnotation = method.getAnnotation(RolesAllowed.class);
+				Set<String> rolesSet = new HashSet<>(Arrays.asList(rolesAnnotation.value()));
 
 				/*//Is user valid?
 				if( ! isUserAllowed(username, password, rolesSet))
@@ -101,24 +109,29 @@ public class AuthenticationFilter implements ContainerRequestFilter
 					requestContext.abortWith(Response.status(Response.Status.UNAUTHORIZED).build());
 					return;
 				}*/
-				}
 			}
-			catch(NotAuthorizedException e)
+		}
+		catch(NotAuthorizedException e)
+		{
+			/*
+			If user attempts to authorize with invalid token, he has to be informed
+			that the token is invalid, even if no authorization is required.
+			 */
+			requestContext.abortWith(Response
+					.status(Response.Status.UNAUTHORIZED.getStatusCode(),
+							"Authorization token is invalid!")
+					.build());
+			return;
+		}
+		catch(SQLException e)
+		{
+			e.printStackTrace();
+			if(!method.isAnnotationPresent(PermitAll.class))
 			{
 				requestContext.abortWith(Response
-						.status(Response.Status.UNAUTHORIZED.getStatusCode(),
-								"Authorization token is invalid!")
-						.build());
-				return;
+						.status(Response.Status.INTERNAL_SERVER_ERROR).build());
 			}
-			catch(SQLException e)
-			{
-				e.printStackTrace();
-				requestContext.abortWith(Response
-						.status(Response.Status.INTERNAL_SERVER_ERROR)
-						.build());
-				return;
-			}
+			return;
 		}
 	}
 
