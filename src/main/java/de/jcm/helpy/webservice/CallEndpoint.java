@@ -1,22 +1,27 @@
 package de.jcm.helpy.webservice;
 
 import de.jcm.helpy.*;
+import de.jcm.helpy.webservice.authentication.AuthenticationFilter;
 import de.jcm.helpy.webservice.util.SQLUtil;
 
 import javax.annotation.security.PermitAll;
+import javax.annotation.security.RolesAllowed;
 import javax.servlet.ServletContext;
 import javax.ws.rs.*;
 import javax.ws.rs.container.ContainerRequestContext;
 import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
+import javax.ws.rs.core.StreamingOutput;
+import java.io.ByteArrayInputStream;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
 
 @Path("/call")
 public class CallEndpoint
@@ -32,6 +37,8 @@ public class CallEndpoint
 	private PreparedStatement nearCallsStatement;
 	private PreparedStatement callInfoStatement;
 	private PreparedStatement updateEntityInCallStatement;
+	private PreparedStatement getInteractionsStatement;
+	private PreparedStatement interactionDataStatement;
 
 	@Context
 	private void prepare() throws SQLException
@@ -52,8 +59,8 @@ public class CallEndpoint
 						+ "WHERE entity = ? AND emergency_call = ?");
 		insertInteractionStatement = connection.prepareCall(
 				"INSERT INTO emergency_call_interaction "
-						+ "(question, answer, emergency_call, submitter) "
-						+ "VALUES(?, ?, ?, ?)");
+						+ "(language, content_path, chosen_option, emergency_call, submitter) "
+						+ "VALUES(?, ?, ?, ?, ?)");
 		nearCallsStatement = connection.prepareStatement(
 				"SELECT id, geo_distance(latitude, longitude, ?, ?) AS distance, priority "
 						+ "FROM emergency_call "
@@ -65,6 +72,14 @@ public class CallEndpoint
 						+ "FROM emergency_call WHERE id = ?");
 		updateEntityInCallStatement = connection.prepareStatement(
 				"UPDATE entity_in_call SET state=? WHERE entity=? AND emergency_call=?");
+		getInteractionsStatement = connection.prepareStatement(
+				"SELECT id, language, content_path, chosen_option, emergency_call, "
+						+ "submitter, time "
+						+ "FROM emergency_call_interaction WHERE emergency_call = ? "
+						+ "ORDER BY time DESC");
+		interactionDataStatement = connection.prepareStatement(
+				"SELECT additional_data FROM emergency_call_interaction "
+						+ "WHERE id = ? AND emergency_call = ?");
 	}
 
 	@PUT
@@ -111,11 +126,12 @@ public class CallEndpoint
 	}
 
 	@PUT
-	@Path("/{id}/answer")
+	@Path("/{id}/interactions")
 	@Consumes(MediaType.APPLICATION_FORM_URLENCODED)
-	public Response updateQuestion(@PathParam("id") int id,
-			@FormParam("question") String question,
-			@FormParam("answer") String answer,
+	public Response addInteraction(@PathParam("id") int id,
+			@FormParam("language") String language,
+			@FormParam("content_path") String contentPath,
+			@FormParam("chosen_option") int chosenOption,
 			@Context ContainerRequestContext request) throws SQLException
 	{
 		EntityInfo entity = (EntityInfo)request.getProperty("entity");
@@ -129,10 +145,11 @@ public class CallEndpoint
 			return Response.status(Response.Status.FORBIDDEN.getStatusCode(),
 					"not joined call").build();
 
-		insertInteractionStatement.setString(1, question);
-		insertInteractionStatement.setString(2, answer);
-		insertInteractionStatement.setInt(3, id);
-		insertInteractionStatement.setBytes(4, SQLUtil.UUIDHelper.toBytes(uuid));
+		insertInteractionStatement.setString(1, language);
+		insertInteractionStatement.setString(2, contentPath);
+		insertInteractionStatement.setInt(3, chosenOption);
+		insertInteractionStatement.setInt(4, id);
+		insertInteractionStatement.setBytes(5, SQLUtil.UUIDHelper.toBytes(uuid));
 		insertInteractionStatement.execute();
 
 		return Response.noContent().build();
@@ -188,8 +205,6 @@ public class CallEndpoint
 	@PermitAll
 	public Response byId(@PathParam("id") int id, @Context ContainerRequestContext request) throws SQLException
 	{
-		EntityInfo entity = (EntityInfo)request.getProperty("entity");
-
 		callInfoStatement.setInt(1, id);
 		ResultSet result = callInfoStatement.executeQuery();
 
@@ -246,5 +261,127 @@ public class CallEndpoint
 		this.joinCallStatement.execute();
 
 		return Response.ok().build();
+	}
+
+	@GET
+	@Path("/{id}/interactions")
+	@Produces(MediaType.APPLICATION_JSON)
+	@RolesAllowed("AMBULANCE")
+	public Response getInteractions(@PathParam("id") int id,
+	                                @Context ContainerRequestContext request) throws SQLException
+	{
+		if (!testCall(id)) {
+			return Response.status(Response.Status.NOT_FOUND).type("text/plain")
+					.entity("call with id " + id + " not found!").build();
+		}
+
+		this.getInteractionsStatement.setInt(1, id);
+		ResultSet result = this.getInteractionsStatement.executeQuery();
+
+		ArrayList<CallInteraction> interactions = new ArrayList<>();
+		while(result.next())
+		{
+			CallInteraction interaction = new CallInteraction();
+			interaction.id = result.getInt("id");
+			interaction.language = result.getString("language");
+			interaction.contentPath = result.getString("content_path");
+			interaction.chosenOption = result.getInt("chosen_option");
+			interaction.callId = result.getInt("emergency_call");
+			interaction.submitter = SQLUtil.UUIDHelper.fromBytes(result.getBytes("submitter"));
+			interaction.time = result.getTimestamp("time");
+
+			interactions.add(interaction);
+		}
+
+		return Response.ok(interactions).build();
+	}
+
+	@GET
+	@Path("/{id}/interactions/last")
+	@Produces(MediaType.APPLICATION_JSON)
+	public Response getLastInteraction(@PathParam("id") int id,
+	                                @Context ContainerRequestContext request) throws SQLException
+	{
+		EntityInfo entity = (EntityInfo)request.getProperty("entity");
+
+		if (!testCall(id))
+		{
+			return Response.status(Response.Status.NOT_FOUND).type("text/plain")
+					.entity("call with id " + id + " not found!").build();
+		}
+		if(!testEntityInCall(id, entity.uuid)
+				&& !(entity.role.equals("AMBULANCE")
+				|| Arrays.asList(AuthenticationFilter.SUPER_ROLES).contains(entity.role)))
+		{
+			return Response.status(Response.Status.NOT_ACCEPTABLE)
+					.type(MediaType.TEXT_PLAIN_TYPE)
+					.entity("user not in call!")
+					.build();
+		}
+
+		this.getInteractionsStatement.setInt(1, id);
+		ResultSet result = this.getInteractionsStatement.executeQuery();
+
+		if(result.next())
+		{
+			CallInteraction interaction = new CallInteraction();
+			interaction.id = result.getInt("id");
+			interaction.language = result.getString("language");
+			interaction.contentPath = result.getString("content_path");
+			interaction.chosenOption = result.getInt("chosen_option");
+			interaction.callId = result.getInt("emergency_call");
+			interaction.time = result.getTimestamp("time");
+			if(entity.role.equals("AMBULANCE")
+					|| Arrays.asList(AuthenticationFilter.SUPER_ROLES).contains(entity.role))
+			{
+				interaction.submitter =
+						SQLUtil.UUIDHelper.fromBytes(result.getBytes("submitter"));
+			}
+
+			return Response.ok(interaction).build();
+		}
+		else
+		{
+			return Response.noContent().build();
+		}
+	}
+
+	@GET
+	@Path("/{cid}/interactions/{iid}")
+	@Produces(MediaType.APPLICATION_OCTET_STREAM)
+	@RolesAllowed({"AMBULANCE"})
+	public Response getInteractionInfo(@PathParam("cid") int callId,
+	                                   @PathParam("iid") int interactionId,
+	                                @Context ContainerRequestContext request) throws SQLException
+	{
+		if(!testCall(callId))
+		{
+			return Response.status(Response.Status.NOT_FOUND).type("text/plain")
+					.entity("call with id " + callId + " not found!").build();
+		}
+
+		this.interactionDataStatement.setInt(1, interactionId);
+		this.interactionDataStatement.setInt(2, callId);
+		ResultSet result = this.interactionDataStatement.executeQuery();
+
+		if(result.next())
+		{
+			byte[] data = result.getBytes("additional_data");
+			if(data!=null)
+			{
+				return Response
+						.ok((StreamingOutput) new ByteArrayInputStream(data)::transferTo)
+						.build();
+			}
+			else
+			{
+				return Response.noContent().build();
+			}
+		}
+		else
+		{
+			return Response.status(Response.Status.NOT_FOUND).type("text/plain")
+					.entity("interaction with id " + interactionId + " not found!").build();
+		}
 	}
 }

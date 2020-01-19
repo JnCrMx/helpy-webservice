@@ -28,6 +28,7 @@ public class AuthenticationFilter implements ContainerRequestFilter
 {
 	private static final String AUTHORIZATION_PROPERTY = "Authorization";
 	private static final String AUTHENTICATION_SCHEME = "Bearer";
+	public static final String[] SUPER_ROLES = {"ADMIN", "DEVELOPER"};
 
 	private @Context ResourceInfo resourceInfo;
 	private @Context ServletContext context;
@@ -103,12 +104,12 @@ public class AuthenticationFilter implements ContainerRequestFilter
 				RolesAllowed rolesAnnotation = method.getAnnotation(RolesAllowed.class);
 				Set<String> rolesSet = new HashSet<>(Arrays.asList(rolesAnnotation.value()));
 
-				/*//Is user valid?
-				if( ! isUserAllowed(username, password, rolesSet))
+				if(!rolesSet.contains(entityInfo.role)
+						&& !Arrays.asList(SUPER_ROLES).contains(entityInfo.role))
 				{
 					requestContext.abortWith(Response.status(Response.Status.UNAUTHORIZED).build());
 					return;
-				}*/
+				}
 			}
 		}
 		catch(NotAuthorizedException e)
@@ -150,27 +151,5 @@ public class AuthenticationFilter implements ContainerRequestFilter
 		info.role = result.getString("role");
 
 		return info;
-	}
-
-	private boolean isUserAllowed(final String username, final String password, final Set<String> rolesSet)
-	{
-		boolean isAllowed = false;
-
-		//Step 1. Fetch password from database and match with password in argument
-		//If both match then get the defined role for user from database and continue; else return isAllowed [false]
-		//Access the database and do this part yourself
-		//String userRole = userMgr.getUserRole(username);
-
-		if(username.equals("howtodoinjava") && password.equals("password"))
-		{
-			String userRole = "ADMIN";
-
-			//Step 2. Verify user role
-			if(rolesSet.contains(userRole))
-			{
-				isAllowed = true;
-			}
-		}
-		return isAllowed;
 	}
 }
